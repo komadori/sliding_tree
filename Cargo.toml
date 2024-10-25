@@ -1,0 +1,25 @@
+[package]
+name = "sliding_tree"
+version = "0.1.0"
+authors = ["Robin KAY <komadori@gekkou.co.uk>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Sliding Tree"
+readme = "README.md"
+homepage = "https://github.com/komadori/sliding_tree"
+repository = "https://github.com/komadori/sliding_tree"
+keywords = ["tree", "arena"]
+categories = ["data-structures"]
+
+[dependencies]
+smallvec = "1"
+
+[dev-dependencies]
+criterion = "0.5"
+enumoid = "0.4"
+rand = "0.8"
+rand_pcg = "0.3"
+
+[[bench]]
+name = "mcts_benchmark"
+harness = false
