@@ -128,11 +128,6 @@ pub fn play_mcts(
 
         // Apply the best move and update the tree
         let mut best_child = tree.at_mut(best_child_index);
-        /*println!(
-            "best child win rate: {:?}={}",
-            Player::Player1,
-            best_child.user().win_rate(Player::Player1)
-        );*/
         root_state = best_child.get().clone();
         best_child.set_pending_roots();
         tree.update_roots();
