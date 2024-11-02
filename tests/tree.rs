@@ -280,7 +280,7 @@ fn test_two_subtrees() {
 }
 
 #[test]
-fn test_subtree_overflow() {
+fn test_subtree_overflow_with_hint() {
     // Create a 2 level tree.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(101);
     tree.set_roots_subtree((0..2).map(|x| (x, ())), |_, mut node| {
@@ -296,6 +296,28 @@ fn test_subtree_overflow() {
     tree.at_mut(0).at_mut(0).set_pending_roots();
     tree.update_roots();
     assert_eq!(stats(&tree), (100, 0, 1, 2));
+}
+
+#[test]
+fn test_subtree_overflow_without_hint() {
+    // Fill most of first buffer.
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(101);
+    tree.set_roots(0..100);
+    assert_eq!(stats(&tree), (100, 0, 1, 0));
+
+    // Create a 2 level subtree which overflows the first buffer.
+    tree.at_mut(0).set_children_subtree(
+        HideSizeHint(0..2).map(|x| (x, ())),
+        |_, mut node| {
+            node.set_children(0..50);
+        },
+    );
+    assert_eq!(stats(&tree), (202, 2, 1, 0));
+
+    // Remove first level and only one buffer should be recycled.
+    tree.at_mut(0).set_pending_roots();
+    tree.update_roots();
+    assert_eq!(stats(&tree), (102, 1, 1, 1));
 }
 
 #[test]
