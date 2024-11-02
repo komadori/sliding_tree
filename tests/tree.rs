@@ -1,6 +1,8 @@
 use std::{ops::RangeBounds, slice};
 
-use sliding_tree::{Node, NodeIterMut, SlidingTree};
+use sliding_tree::{
+    HasChildren, HasChildrenMut, Node, NodeIterMut, SlidingTree,
+};
 
 struct HideSizeHint<I>(I);
 
@@ -70,7 +72,7 @@ fn test_empty() {
 #[test]
 fn test_root_data() {
     let mut tree: SlidingTree<usize> = SlidingTree::new();
-    tree.set_roots(0..10);
+    tree.set_children(0..10);
     assert!(!tree.is_empty());
     assert_eq!(tree.len(), 10);
 
@@ -92,7 +94,7 @@ fn test_root_data() {
 #[test]
 fn test_node_data() {
     let mut tree: SlidingTree<usize> = SlidingTree::new();
-    tree.set_roots(0..1);
+    tree.set_children(0..1);
     let mut node = tree.at_mut(0);
     node.set_children(0..10);
     assert!(!node.is_empty());
@@ -125,7 +127,7 @@ fn test_grow_capacity_100() {
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(100);
     assert_eq!(tree.buffer_stats(), (0, 0, 0));
 
-    tree.set_roots(0..10);
+    tree.set_children(0..10);
     assert_eq!(stats(&tree), (10, 0, 1, 0));
     deepen_tree(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (110, 1, 1, 0));
@@ -141,7 +143,7 @@ fn test_grow_capacity_49_with_hint() {
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(49);
     assert_eq!(tree.buffer_stats(), (0, 0, 0));
 
-    tree.set_roots(0..10);
+    tree.set_children(0..10);
     assert_eq!(stats(&tree), (10, 0, 1, 0));
     deepen_tree(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (110, 2, 1, 0));
@@ -157,7 +159,7 @@ fn test_grow_capacity_49_without_hint() {
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(49);
     assert_eq!(tree.buffer_stats(), (0, 0, 0));
 
-    tree.set_roots(HideSizeHint(0..10));
+    tree.set_children(HideSizeHint(0..10));
     assert_eq!(stats(&tree), (10, 0, 1, 0));
     deepen_tree_no_hint(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (110, 2, 1, 0));
@@ -171,7 +173,7 @@ fn test_grow_capacity_49_without_hint() {
 #[test]
 fn test_grow_capacity_10_and_trim() {
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(10);
-    tree.set_roots(0..10);
+    tree.set_children(0..10);
     assert_eq!(stats(&tree), (10, 1, 0, 0));
     deepen_tree(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (110, 11, 0, 0));
@@ -192,7 +194,7 @@ fn test_grow_capacity_10_and_trim() {
 fn test_capacity_too_small() {
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(10);
     assert_eq!(tree.capacity(), 10);
-    tree.set_roots(0..100);
+    tree.set_children(0..100);
     assert_eq!(stats(&tree), (100, 1, 0, 0));
     assert_eq!(tree.capacity(), 100);
 }
@@ -200,7 +202,7 @@ fn test_capacity_too_small() {
 #[test]
 fn test_follow_first_child() {
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(100);
-    tree.set_roots(0..10);
+    tree.set_children(0..10);
     deepen_tree(tree.iter_mut(), 0..10);
     deepen_tree(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (1110, 11, 1, 0));
@@ -221,7 +223,7 @@ fn test_follow_first_child() {
 #[test]
 fn test_follow_last_child() {
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(100);
-    tree.set_roots(0..10);
+    tree.set_children(0..10);
     deepen_tree(tree.iter_mut(), 0..10);
     deepen_tree(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (1110, 11, 1, 0));
@@ -243,7 +245,7 @@ fn test_follow_last_child() {
 fn test_two_subtrees() {
     // Build a 3 level subtree.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(1001);
-    tree.set_roots_subtree((0..10).map(|x| (x, ())), |_, mut node| {
+    tree.set_children_subtree((0..10).map(|x| (x, ())), |_, mut node| {
         node.set_children_subtree((0..10).map(|x| (x, ())), |_, mut node| {
             node.set_children(0..10);
         });
@@ -257,33 +259,33 @@ fn test_two_subtrees() {
             node.set_children_subtree(
                 (0..10).map(|x| (x, ())),
                 |_, mut node| {
-                    node.set_children(0..10);
+                    node.set_children(0..20);
                 },
             );
         },
     );
-    assert_eq!(stats(&tree), (2220, 3, 2, 0));
+    assert_eq!(stats(&tree), (3220, 2, 3, 0));
 
     // Moving roots to the second subtree does not recycle the first subtree.
     tree.at_mut(0).at_mut(0).at_mut(0).set_pending_roots();
     tree.update_roots();
-    assert_eq!(stats(&tree), (1110, 3, 2, 0));
+    assert_eq!(stats(&tree), (2110, 2, 3, 0));
 
-    // Moving roots further forward does recycle the first subtree.
+    // Moving roots further forward recycles both subtrees.
     let mut branch1 = tree.at_mut(0);
     let mut branch2 = branch1.at_mut(0);
     let mut leaf = branch2.at_mut(0);
-    leaf.set_children(0..1);
+    leaf.set_children(0..1000);
     leaf.set_pending_roots();
     tree.update_roots();
-    assert_eq!(stats(&tree), (1, 0, 2, 3));
+    assert_eq!(stats(&tree), (1000, 0, 1, 5));
 }
 
 #[test]
 fn test_subtree_overflow_with_hint() {
     // Create a 2 level tree.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(101);
-    tree.set_roots_subtree((0..2).map(|x| (x, ())), |_, mut node| {
+    tree.set_children_subtree((0..2).map(|x| (x, ())), |_, mut node| {
         node.set_children(0..50);
     });
     assert_eq!(stats(&tree), (102, 0, 2, 0));
@@ -302,7 +304,7 @@ fn test_subtree_overflow_with_hint() {
 fn test_subtree_overflow_without_hint() {
     // Fill most of first buffer.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(101);
-    tree.set_roots(0..100);
+    tree.set_children(0..100);
     assert_eq!(stats(&tree), (100, 0, 1, 0));
 
     // Create a 2 level subtree which overflows the first buffer.
@@ -324,17 +326,17 @@ fn test_subtree_overflow_without_hint() {
 fn test_subtree_no_overflow() {
     // Create a 2 level tree.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(101);
-    tree.set_roots_subtree((0..2).map(|x| (x, ())), |_, mut node| {
-        node.set_children(0..50);
+    tree.set_children_subtree((0..2).map(|x| (x, ())), |_, mut node| {
+        node.set_children(0..49);
     });
-    assert_eq!(stats(&tree), (102, 0, 2, 0));
+    assert_eq!(stats(&tree), (100, 0, 2, 0));
 
-    // Adding 99 further children fits in the first current buffer.
-    tree.at_mut(0).at_mut(0).set_children(0..99);
-    assert_eq!(stats(&tree), (201, 1, 1, 0));
+    // Adding 2 further children fits in the smaller current buffer.
+    tree.at_mut(0).at_mut(0).set_children(0..2);
+    assert_eq!(stats(&tree), (102, 0, 2, 0));
 
     // Remove first two levels and nothing is recycled.
     tree.at_mut(0).at_mut(0).set_pending_roots();
     tree.update_roots();
-    assert_eq!(stats(&tree), (99, 1, 1, 0));
+    assert_eq!(stats(&tree), (2, 0, 2, 0));
 }

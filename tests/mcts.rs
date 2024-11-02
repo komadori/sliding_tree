@@ -1,6 +1,6 @@
 use enumoid::{EnumMap, Enumoid};
 use rand::prelude::*;
-use sliding_tree::{Node, NodeMut, SlidingTree};
+use sliding_tree::{HasChildren, HasChildrenMut, Node, NodeMut, SlidingTree};
 use smallvec::SmallVec;
 use std::{f32, slice};
 
@@ -104,7 +104,7 @@ pub fn play_mcts(
     rng: &mut impl Rng,
 ) -> Player {
     let mut tree = SlidingTree::new();
-    tree.set_roots(root_state.possible_moves().iter().map(|&mv| {
+    tree.set_children(root_state.possible_moves().iter().map(|&mv| {
         let mut new_state = root_state.clone();
         new_state.apply_move(mv);
         new_state

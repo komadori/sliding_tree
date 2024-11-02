@@ -1,6 +1,6 @@
 use core::{
     cell::{RefCell, RefMut},
-    cmp,
+    cmp::{self, Reverse},
     ops::Range,
     slice,
 };
@@ -10,29 +10,51 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use smallvec::SmallVec;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Generation(usize);
 
 impl Generation {
-    pub const INVALID: Generation = Generation(usize::MAX);
+    const FIRST: Generation = Generation(0);
 
     fn advance(&mut self) {
         self.0 += 1;
     }
+}
 
-    fn is_older_than(&self, other: Generation) -> bool {
-        self.0 < other.0
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct GenerationSpan {
+    start: Generation,
+    end: Generation,
+}
+
+impl GenerationSpan {
+    const INVALID: GenerationSpan = GenerationSpan {
+        start: Generation(usize::MAX),
+        end: Generation(usize::MAX),
+    };
+
+    fn is_older_than(&self, other: GenerationSpan) -> bool {
+        self.end < other.start
+    }
+}
+
+impl From<Generation> for GenerationSpan {
+    fn from(gen: Generation) -> Self {
+        GenerationSpan {
+            start: gen,
+            end: gen,
+        }
     }
 }
 
 struct Buffer<T> {
     vec: Vec<T>,
     ptr_range: Range<*const T>,
-    generation: Generation,
+    generation: GenerationSpan,
 }
 
 impl<T> Buffer<T> {
-    fn new(capacity: usize, generation: Generation) -> Buffer<T> {
+    fn new(capacity: usize, generation: GenerationSpan) -> Buffer<T> {
         let vec = Vec::<T>::with_capacity(capacity);
         let start = vec.as_ptr();
         // SAFETY: The pointer `end` is never dereferenced and the memory
@@ -47,7 +69,7 @@ impl<T> Buffer<T> {
 
     fn clear(&mut self) {
         self.vec.clear();
-        self.generation = Generation::INVALID;
+        self.generation = GenerationSpan::INVALID;
     }
 
     #[inline]
@@ -67,7 +89,8 @@ struct SlidingBuffersState<T> {
     current: SmallVec<[Buffer<T>; 4]>,
     recycle: Vec<Buffer<T>>,
     current_generation: Generation,
-    should_advance: bool,
+    depth: usize,
+    flat_allocation: bool,
 }
 
 impl<T> SlidingBuffersState<T> {
@@ -77,71 +100,109 @@ impl<T> SlidingBuffersState<T> {
             // will eventually be freed rather than recycled.
             self.capacity = cmp::max(required, self.capacity * 2);
         }
+        self.depth += 1;
+        let first_recursion = self.depth > 1 && self.flat_allocation;
+        if first_recursion {
+            // When starting a recursive allocation, advance the
+            // generation before any new buffer might be needed.
+            self.current_generation.advance();
+            self.flat_allocation = false;
+        }
         loop {
             let buf = match self.current.pop() {
                 Some(buf) => {
                     if buf.vec.capacity() - buf.vec.len() < required {
                         // The buffer is too small.
-                        self.should_advance = true;
                         self.finished.push_back(buf);
                         continue;
                     }
                     buf
                 }
                 None => {
-                    if self.should_advance {
+                    if self.flat_allocation {
+                        // Outside of a recursive allocation, advance the
+                        // generation once for each new buffer.
                         self.current_generation.advance();
-                        self.should_advance = false;
                     }
                     match self.recycle.pop() {
                         Some(mut buf) => {
                             // Use a recycled buffer.
-                            buf.generation = self.current_generation;
+                            buf.generation = self.current_generation.into();
                             buf
                         }
                         None => {
                             // No free buffers, allocate a new one.
-                            Buffer::new(self.capacity, self.current_generation)
+                            Buffer::new(
+                                self.capacity,
+                                self.current_generation.into(),
+                            )
                         }
                     }
                 }
             };
-            debug_assert_eq!(buf.generation, self.current_generation);
             debug_assert_eq!(buf.vec.as_ptr(), buf.ptr_range.start);
+            debug_assert_eq!(
+                unsafe { buf.vec.as_ptr().add(buf.vec.capacity()) },
+                buf.ptr_range.end
+            );
             return buf;
         }
     }
 
     fn handle_full_buffer(
         &mut self,
-        mut buf: Buffer<T>,
+        buf: Buffer<T>,
         start_offset: usize,
         remaining_lower_bound: usize,
     ) -> (Buffer<T>, usize) {
         let required = buf.vec.len() - start_offset + 1 + remaining_lower_bound;
 
-        self.should_advance = true;
+        // Put the old buffer back first to preserve order.
+        self.depth -= 1;
+        let old_buf_idx = self.finished.len();
+        self.finished.push_back(buf);
+
+        // Get a new buffer.
         let mut new_buf = self.take_current_buffer(required);
         let new_start_offset = new_buf.vec.len();
 
+        // Index is still valid because only push_back() is called.
+        let old_buf = &mut self.finished[old_buf_idx];
+
         // Copy already iterated nodes to the new buffer.
-        new_buf.vec.extend(buf.vec.drain(start_offset..));
-        self.finished.push_back(buf);
+        new_buf.vec.extend(old_buf.vec.drain(start_offset..));
         (new_buf, new_start_offset)
     }
 
-    fn put_back(&mut self, buf: Buffer<T>) {
+    fn put_back(&mut self, mut buf: Buffer<T>) {
         debug_assert_eq!(buf.vec.as_ptr(), buf.ptr_range.start);
+
+        // Extend the range of the buffer to the current generation.
+        buf.generation.end = self.current_generation;
+
+        // Exit scope.
+        self.depth -= 1;
+        self.flat_allocation |= self.depth == 0;
+
+        // Put the buffer back.
         if buf.is_full() {
-            self.should_advance = true;
-        }
-        if buf.is_full()
-            || buf.generation.is_older_than(self.current_generation)
-        {
             self.finished.push_back(buf);
         } else {
             self.current.push(buf);
         }
+
+        // Sort buffers so that the most filled buffer will be used first.
+        self.current
+            .sort_by_key(|buf| Reverse(buf.vec.capacity() - buf.vec.len()));
+    }
+
+    fn find_generation(&self, ptr: *const T) -> GenerationSpan {
+        self.finished
+            .iter()
+            .chain(self.current.iter())
+            .find(|buf| buf.contains(ptr))
+            .map(|buf| buf.generation)
+            .expect("slice not present in this SlidingBuffers")
     }
 }
 
@@ -174,8 +235,9 @@ impl<T> SlidingBuffers<T> {
                 finished: VecDeque::new(),
                 current: SmallVec::new(),
                 recycle: Vec::new(),
-                current_generation: Generation::default(),
-                should_advance: false,
+                current_generation: Generation::FIRST,
+                depth: 0,
+                flat_allocation: true,
             }),
         }
     }
@@ -188,7 +250,7 @@ impl<T> SlidingBuffers<T> {
         cell.finished.reserve(required);
         for _ in 0..required {
             cell.recycle
-                .push(Buffer::new(capacity, Generation::INVALID))
+                .push(Buffer::new(capacity, GenerationSpan::INVALID))
         }
     }
 
@@ -226,6 +288,7 @@ impl<T> SlidingBuffers<T> {
                 buf.vec.len() - start_offset,
             )
         };
+        debug_assert!(buf.contains(slice.as_ptr()));
         self.borrow_mut().put_back(buf);
         slice
     }
@@ -251,24 +314,20 @@ impl<T> SlidingBuffers<T> {
 
     /// Recycles all allocation buffers older than the supplied `slice`.
     ///
+    /// # Panics
+    ///
+    /// Panics if the supplied `slice` is not a valid reference to an
+    /// allocation from this `SlidingBuffers`.
+    ///
     /// # Safety
     ///
     /// This function is unsafe because it assumes that all existing references
     /// to allocated slices older than the supplied `slice` are no longer in
     /// use. Calling this function while there are outstanding references may
     /// lead to undefined behaviour.
-    ///
-    /// If `slice` was not allocated from this `SlidingBuffers`, it is not
-    /// defined which buffers will be recycled.
     pub unsafe fn recycle_older_than(&mut self, slice: &[T]) {
-        let ptr = slice.as_ptr();
         let mut cell = self.borrow_mut();
-        let generation = cell
-            .finished
-            .iter()
-            .find(|buf| buf.contains(ptr))
-            .map(|buf| buf.generation)
-            .unwrap_or(cell.current_generation);
+        let generation = cell.find_generation(slice.as_ptr());
         while let Some(peek_buf) = cell.finished.front_mut() {
             if peek_buf.generation.is_older_than(generation) {
                 let mut buf = cell.finished.pop_front().unwrap();
@@ -279,6 +338,36 @@ impl<T> SlidingBuffers<T> {
             } else {
                 break;
             }
+        }
+    }
+
+    /// Asserts that `src` can safely reference `dst`.
+    ///
+    /// This function is provided to assist in testing and debugging data
+    /// structures built on top of `SlidingBuffers`.
+    ///
+    /// # Panics
+    ///
+    /// May panic if `src` was allocated after `dst` and it is therefore unsafe
+    /// for data in `src` to reference `dst`. However, this detection is
+    /// performed with buffer-level granularity and so it is not guaranteed to
+    /// detect all such cases.
+    ///
+    /// Panics if either `src` or `dst` are not valid references to allocations
+    /// from this `SlidingBuffers`, with the exception that `dst` may be an
+    /// empty slice.
+    pub fn assert_can_reference(&self, src: &[T], dst: &[T]) {
+        let cell = self.state.borrow();
+        let src_generation = cell.find_generation(src.as_ptr());
+        if !dst.is_empty() {
+            let dst_generation = cell.find_generation(dst.as_ptr());
+            assert!(!dst_generation.is_older_than(src_generation),
+                "src in generation {}:{} cannot reference dst in generation {}:{}",
+                src_generation.start.0,
+                src_generation.end.0,
+                dst_generation.start.0,
+                dst_generation.end.0
+            );
         }
     }
 

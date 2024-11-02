@@ -10,7 +10,7 @@ hood to manage memory.
 
 ```toml
 [dependencies]
-sliding-tree = "0.1"
+sliding-tree = "0.2"
 ```
 
 ## Usage
