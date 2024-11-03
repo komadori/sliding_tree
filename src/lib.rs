@@ -61,7 +61,7 @@ pub trait HasChildrenMut<'a, T>: HasChildren<'a, T> {
     fn set_children_subtree<I, F, U>(&mut self, iterable: I, builder: F)
     where
         I: IntoIterator<Item = (T, U)>,
-        F: FnMut(U, NodeMut<'a, '_, T>);
+        F: FnMut(NodeMut<'a, '_, T>, U);
 
     /// Adopts the children of the child node at the given index as the
     /// children here.
@@ -179,7 +179,7 @@ impl<'a, T> HasChildrenMut<'a, T> for NodeMut<'a, '_, T> {
     fn set_children_subtree<I, F, U>(&mut self, iterable: I, builder: F)
     where
         I: IntoIterator<Item = (T, U)>,
-        F: FnMut(U, NodeMut<'a, '_, T>),
+        F: FnMut(NodeMut<'a, '_, T>, U),
     {
         self.node.children = self.state.alloc_iter_recursive(iterable, builder);
     }
@@ -248,7 +248,7 @@ impl<'a, T> HasChildrenMut<'a, T> for NodeChildrenMut<'a, '_, T> {
     fn set_children_subtree<I, F, U>(&mut self, iterable: I, builder: F)
     where
         I: IntoIterator<Item = (T, U)>,
-        F: FnMut(U, NodeMut<'a, '_, T>),
+        F: FnMut(NodeMut<'a, '_, T>, U),
     {
         *self.children = self.state.alloc_iter_recursive(iterable, builder);
     }
@@ -362,7 +362,7 @@ impl<'a, T> SlidingTreeState<'a, T> {
     ) -> &'a mut [Node<'a, T>]
     where
         I: IntoIterator<Item = (T, U)>,
-        F: FnMut(U, NodeMut<'a, '_, T>),
+        F: FnMut(NodeMut<'a, '_, T>, U),
     {
         self.buffers
             .alloc_iter(iter.into_iter().map(|(data, recursion)| {
@@ -374,7 +374,7 @@ impl<'a, T> SlidingTreeState<'a, T> {
                     node: &mut node,
                     state: self,
                 };
-                builder(recursion, node_mut);
+                builder(node_mut, recursion);
                 node
             }))
     }
@@ -543,7 +543,7 @@ impl<'a, T> HasChildrenMut<'a, T> for SlidingTree<'a, T> {
     fn set_children_subtree<I, F, U>(&mut self, iterable: I, builder: F)
     where
         I: IntoIterator<Item = (T, U)>,
-        F: FnMut(U, NodeMut<'a, '_, T>),
+        F: FnMut(NodeMut<'a, '_, T>, U),
     {
         self.state.pending_roots.set(None);
         self.roots = RefSliceCell::new(

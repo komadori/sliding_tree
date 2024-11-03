@@ -244,8 +244,8 @@ fn test_follow_last_child() {
 fn test_two_subtrees() {
     // Build a 3 level subtree.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(1001);
-    tree.set_children_subtree((0..10).map(|x| (x, ())), |_, mut node| {
-        node.set_children_subtree((0..10).map(|x| (x, ())), |_, mut node| {
+    tree.set_children_subtree((0..10).map(|x| (x, ())), |mut node, _| {
+        node.set_children_subtree((0..10).map(|x| (x, ())), |mut node, _| {
             node.set_children(0..10);
         });
     });
@@ -254,10 +254,10 @@ fn test_two_subtrees() {
     // Add another subtree to the first leaf.
     tree.at_mut(0).at_mut(0).at_mut(0).set_children_subtree(
         (0..10).map(|x| (x, ())),
-        |_, mut node| {
+        |mut node, _| {
             node.set_children_subtree(
                 (0..10).map(|x| (x, ())),
-                |_, mut node| {
+                |mut node, _| {
                     node.set_children(0..20);
                 },
             );
@@ -284,7 +284,7 @@ fn test_two_subtrees() {
 fn test_subtree_overflow_with_hint() {
     // Create a 2 level tree.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(101);
-    tree.set_children_subtree((0..2).map(|x| (x, ())), |_, mut node| {
+    tree.set_children_subtree((0..2).map(|x| (x, ())), |mut node, _| {
         node.set_children(0..50);
     });
     assert_eq!(stats(&tree), (102, 0, 2, 0));
@@ -309,7 +309,7 @@ fn test_subtree_overflow_without_hint() {
     // Create a 2 level subtree which overflows the first buffer.
     tree.at_mut(0).set_children_subtree(
         HideSizeHint(0..2).map(|x| (x, ())),
-        |_, mut node| {
+        |mut node, _| {
             node.set_children(0..50);
         },
     );
@@ -325,7 +325,7 @@ fn test_subtree_overflow_without_hint() {
 fn test_subtree_no_overflow() {
     // Create a 2 level tree.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(101);
-    tree.set_children_subtree((0..2).map(|x| (x, ())), |_, mut node| {
+    tree.set_children_subtree((0..2).map(|x| (x, ())), |mut node, _| {
         node.set_children(0..49);
     });
     assert_eq!(stats(&tree), (100, 0, 2, 0));
