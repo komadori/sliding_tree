@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 pub use buffers::SlidingBuffers;
+use cell::RefSliceCell;
 use core::{
     cell::Cell,
     fmt::{self, Debug, Formatter},
@@ -9,25 +10,26 @@ use core::{
 };
 
 mod buffers;
+mod cell;
 
 /// A trait for types that have child nodes.
 ///
 /// This trait primarily exists for documentation purposes. Consider calling
 /// `children` before writing generic code over this trait.
 pub trait HasChildren<'a, T> {
-    /// Returns a reference to the children of this node.
+    /// Returns a reference to the child nodes.
     fn children(&self) -> &[Node<'a, T>];
 
     /// Returns true if this node has no children, false otherwise.
     fn is_empty(&self) -> bool;
 
-    /// Returns the number of children of this node.
+    /// Returns the number of child nodes.
     fn len(&self) -> usize;
 
-    /// Returns an iterator over references to the children of this node.
+    /// Returns an iterator over references to the child nodes.
     fn iter(&self) -> slice::Iter<'_, Node<'a, T>>;
 
-    /// Returns a reference to the child at the given index.
+    /// Returns a reference to the child node at the given index.
     fn at(&self, index: usize) -> &Node<'a, T>;
 }
 
@@ -36,42 +38,49 @@ pub trait HasChildren<'a, T> {
 /// This trait primarily exists for documentation purposes. Consider calling
 /// `children_mut` before writing generic code over this trait.
 pub trait HasChildrenMut<'a, T>: HasChildren<'a, T> {
-    /// Returns a mutable reference to the children of this node.
+    /// Returns a mutable reference to the child nodes.
     fn children_mut(&mut self) -> NodeChildrenMut<'a, '_, T>;
 
-    /// Sets the children of this node using the provided iterable.
+    /// Sets the child nodes using the provided iterable.
     ///
-    /// This function allocates new nodes for each item in the iterable and
-    /// replaces the current children with these new nodes.
+    /// This function allocates a slice of new nodes for each item in the
+    /// iterable and replaces the current children with these new nodes.
+    /// Any previous child nodes become inaccessible.
     fn set_children<I>(&mut self, iterable: I)
     where
         I: IntoIterator<Item = T>;
 
-    /// Sets the children of this node using the provided iterable, allowing
+    /// Sets the child nodes using the provided iterable, allowing
     /// recursive construction of a subtree.
     ///
-    /// This function allocates new nodes for each item in the iterable and
-    /// replaces the current children with these new nodes. The `builder`
-    /// function is called for each element during iteration, allowing further
-    /// children to be created recursively.
+    /// This function allocates a slice of new nodes for each item in the
+    /// iterable and replaces the current children with these new nodes. The
+    /// `builder` function is called for each element during iteration,
+    /// allowing further children to be created recursively. Any previous child
+    /// nodes become inaccessible.
     fn set_children_subtree<I, F, U>(&mut self, iterable: I, builder: F)
     where
         I: IntoIterator<Item = (T, U)>,
         F: FnMut(U, NodeMut<'a, '_, T>);
 
-    /// Adopts the children of the node at the given index as the new children
-    /// of this node.
+    /// Adopts the children of the child node at the given index as the
+    /// children here.
     ///
-    /// This replaces the current children of the node with the grandchildren.
+    /// This replaces the current children with one set of grandchildren. Any
+    /// previous child nodes and the other sets of grandchildren and their
+    /// descendents become inaccessible.
     fn adopt_grandchildren_at(&mut self, index: usize);
 
-    /// Moves the children of this node to the pending roots of the tree.
-    fn set_pending_roots(&mut self);
+    /// Moves the child nodes from here to become the roots of the tree.
+    ///
+    /// This replaces the current children of the node with an empty slice,
+    /// unless this is already the root.
+    fn move_children_to_root(&mut self);
 
-    /// Returns an iterator over mutable references to the children of this node.
+    /// Returns an iterator over mutable references to the child nodes.
     fn iter_mut(&mut self) -> NodeIterMut<'a, '_, T>;
 
-    /// Returns a mutable reference to the child at the given index.
+    /// Returns a mutable reference to the child node at the given index.
     fn at_mut(&mut self, index: usize) -> NodeMut<'a, '_, T>;
 }
 
@@ -180,7 +189,7 @@ impl<'a, T> HasChildrenMut<'a, T> for NodeMut<'a, '_, T> {
         self.node.children = mem::take(&mut node.children);
     }
 
-    fn set_pending_roots(&mut self) {
+    fn move_children_to_root(&mut self) {
         let children = mem::take(&mut self.node.children);
         self.state.pending_roots.set(Some(children));
     }
@@ -249,7 +258,7 @@ impl<'a, T> HasChildrenMut<'a, T> for NodeChildrenMut<'a, '_, T> {
         *self.children = mem::take(&mut node.children);
     }
 
-    fn set_pending_roots(&mut self) {
+    fn move_children_to_root(&mut self) {
         let children = mem::take(self.children);
         self.state.pending_roots.set(Some(children));
     }
@@ -379,11 +388,20 @@ impl<'a, T> SlidingTreeState<'a, T> {
 /// of the tree can be advanced through the tree making ancestor nodes
 /// inaccessible and allowing their memory to be reused.
 pub struct SlidingTree<'a, T> {
-    roots: &'a mut [Node<'a, T>],
+    roots: RefSliceCell<'a, Node<'a, T>>,
     state: SlidingTreeState<'a, T>,
 }
 
 impl<'a, T> SlidingTree<'a, T> {
+    #[inline]
+    fn process_pending_roots(&self) {
+        // This must be called before reading `self.roots` in case any
+        // pending roots have been set while traversing the tree.
+        if let Some(pending_roots) = self.state.pending_roots.take() {
+            self.roots.set(pending_roots);
+        }
+    }
+
     /// Creates a new empty `SlidingTree` with a default capacity based on
     /// the size of `T`.
     pub fn new() -> SlidingTree<'a, T> {
@@ -396,7 +414,7 @@ impl<'a, T> SlidingTree<'a, T> {
     /// in a single buffer.
     pub fn with_capacity(capacity: usize) -> SlidingTree<'a, T> {
         SlidingTree {
-            roots: &mut [],
+            roots: RefSliceCell::new(&mut []),
             state: SlidingTreeState::with_capacity(capacity),
         }
     }
@@ -408,7 +426,7 @@ impl<'a, T> SlidingTree<'a, T> {
 
     /// Clears the tree, removing the roots, all their descendants, and recycling all buffers.
     pub fn clear(&mut self) {
-        self.roots = &mut [];
+        self.roots = RefSliceCell::new(&mut []);
         self.state.pending_roots.set(None);
         // SAFETY: Once the roots have been cleared, previously allocated nodes
         // are inaccessible and can be recycled.
@@ -417,18 +435,9 @@ impl<'a, T> SlidingTree<'a, T> {
         }
     }
 
-    /// Clears any pending roots set with [`NodeMut::set_pending_roots`].
-    ///
-    /// This does not return the pending roots back to their original node.
-    pub fn clear_pending_roots(&mut self) {
-        self.state.pending_roots.set(None);
-    }
-
-    /// Adopts the pending roots as the new roots of the tree.
-    ///
-    /// This recycles older buffers containing nodes below the root to make
-    /// space for new nodes. If there are no pending roots, this does nothing.
-    pub fn update_roots(&mut self) {
+    /// Recycles buffers containing nodes that are no longer accessible.
+    pub fn recycle(&mut self) {
+        self.process_pending_roots();
         #[cfg(debug_assertions)]
         {
             fn sanity_check<'a, T>(
@@ -440,18 +449,15 @@ impl<'a, T> SlidingTree<'a, T> {
                     sanity_check(node.children, state);
                 }
             }
-            sanity_check(self.roots, &self.state);
+            sanity_check(self.roots.get(), &self.state);
         }
-        if let Some(pending_roots) = self.state.pending_roots.take() {
-            self.roots = pending_roots;
-            if self.roots.is_empty() {
-                self.clear();
-            } else {
-                // SAFETY: Once the roots have been updated, nodes allocated
-                // before the new roots are inaccessible and can be recycled.
-                unsafe {
-                    self.state.buffers.recycle_older_than(self.roots);
-                }
+        if self.roots.get().is_empty() {
+            self.clear();
+        } else {
+            // SAFETY: Once the roots have been updated, nodes allocated
+            // before the new roots are inaccessible and can be recycled.
+            unsafe {
+                self.state.buffers.recycle_older_than(self.roots.get());
             }
         }
     }
@@ -477,8 +483,9 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.process_pending_roots();
         f.debug_struct("SlidingTree")
-            .field("roots", &self.roots)
+            .field("roots", &self.roots.get())
             .finish()
     }
 }
@@ -491,30 +498,36 @@ impl<'a, T> Default for SlidingTree<'a, T> {
 
 impl<'a, T> HasChildren<'a, T> for SlidingTree<'a, T> {
     fn children(&self) -> &[Node<'a, T>] {
-        self.roots
+        self.process_pending_roots();
+        self.roots.get()
     }
 
     fn is_empty(&self) -> bool {
-        self.roots.is_empty()
+        self.process_pending_roots();
+        self.roots.get().is_empty()
     }
 
     fn len(&self) -> usize {
-        self.roots.len()
+        self.process_pending_roots();
+        self.roots.get().len()
     }
 
     fn iter(&self) -> slice::Iter<'_, Node<'a, T>> {
-        self.roots.iter()
+        self.process_pending_roots();
+        self.roots.get().iter()
     }
 
     fn at(&self, index: usize) -> &Node<'a, T> {
-        &self.roots[index]
+        self.process_pending_roots();
+        &self.roots.get()[index]
     }
 }
 
 impl<'a, T> HasChildrenMut<'a, T> for SlidingTree<'a, T> {
     fn children_mut(&mut self) -> NodeChildrenMut<'a, '_, T> {
+        self.process_pending_roots();
         NodeChildrenMut {
-            children: &mut self.roots,
+            children: self.roots.get_mut(),
             state: &self.state,
         }
     }
@@ -523,8 +536,8 @@ impl<'a, T> HasChildrenMut<'a, T> for SlidingTree<'a, T> {
     where
         I: IntoIterator<Item = T>,
     {
-        self.clear();
-        self.roots = self.state.alloc_iter(iterable);
+        self.state.pending_roots.set(None);
+        self.roots = RefSliceCell::new(self.state.alloc_iter(iterable));
     }
 
     fn set_children_subtree<I, F, U>(&mut self, iterable: I, builder: F)
@@ -532,31 +545,36 @@ impl<'a, T> HasChildrenMut<'a, T> for SlidingTree<'a, T> {
         I: IntoIterator<Item = (T, U)>,
         F: FnMut(U, NodeMut<'a, '_, T>),
     {
-        self.clear();
-        self.roots = self.state.alloc_iter_recursive(iterable, builder);
+        self.state.pending_roots.set(None);
+        self.roots = RefSliceCell::new(
+            self.state.alloc_iter_recursive(iterable, builder),
+        );
     }
 
     fn adopt_grandchildren_at(&mut self, index: usize) {
-        let node = &mut self.roots[index];
-        self.roots = mem::take(&mut node.children);
+        self.process_pending_roots();
+        let node = &mut self.roots.get_mut()[index];
+        self.roots = RefSliceCell::new(mem::take(&mut node.children));
+        self.state.pending_roots.set(None);
     }
 
-    fn set_pending_roots(&mut self) {
-        self.state
-            .pending_roots
-            .set(Some(mem::take(&mut self.roots)));
+    fn move_children_to_root(&mut self) {
+        self.process_pending_roots();
+        // This is already the root.
     }
 
     fn iter_mut(&mut self) -> NodeIterMut<'a, '_, T> {
+        self.process_pending_roots();
         NodeIterMut {
-            iter: self.roots.iter_mut(),
+            iter: self.roots.get_mut().iter_mut(),
             state: &self.state,
         }
     }
 
     fn at_mut(&mut self, index: usize) -> NodeMut<'a, '_, T> {
+        self.process_pending_roots();
         NodeMut {
-            node: &mut self.roots[index],
+            node: &mut self.roots.get_mut()[index],
             state: &self.state,
         }
     }

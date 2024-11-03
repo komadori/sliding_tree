@@ -63,8 +63,7 @@ fn test_empty() {
     assert!(tree.is_empty());
     assert_eq!(format!("{:?}", tree), "SlidingTree { roots: [] }");
     tree.preallocate(0);
-    tree.clear_pending_roots();
-    tree.update_roots();
+    tree.recycle();
     tree.trim();
     tree.clear();
 }
@@ -178,8 +177,8 @@ fn test_grow_capacity_10_and_trim() {
     deepen_tree(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (110, 11, 0, 0));
 
-    tree.iter_mut().last().unwrap().set_pending_roots();
-    tree.update_roots();
+    tree.iter_mut().last().unwrap().move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (10, 1, 0, 10));
     tree.trim();
     assert_eq!(stats(&tree), (10, 1, 0, 0));
@@ -207,16 +206,16 @@ fn test_follow_first_child() {
     deepen_tree(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (1110, 11, 1, 0));
 
-    tree.iter_mut().next().unwrap().set_pending_roots();
-    tree.update_roots();
+    tree.iter_mut().next().unwrap().move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (110, 11, 1, 0));
 
-    tree.iter_mut().next().unwrap().set_pending_roots();
-    tree.update_roots();
+    tree.iter_mut().next().unwrap().move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (10, 10, 1, 1));
 
-    tree.iter_mut().next().unwrap().set_pending_roots();
-    tree.update_roots();
+    tree.iter_mut().next().unwrap().move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (0, 0, 0, 12));
 }
 
@@ -228,16 +227,16 @@ fn test_follow_last_child() {
     deepen_tree(tree.iter_mut(), 0..10);
     assert_eq!(stats(&tree), (1110, 11, 1, 0));
 
-    tree.iter_mut().next_back().unwrap().set_pending_roots();
-    tree.update_roots();
+    tree.iter_mut().next_back().unwrap().move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (110, 10, 1, 1));
 
-    tree.iter_mut().next_back().unwrap().set_pending_roots();
-    tree.update_roots();
+    tree.iter_mut().next_back().unwrap().move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (10, 0, 1, 11));
 
-    tree.iter_mut().next_back().unwrap().set_pending_roots();
-    tree.update_roots();
+    tree.iter_mut().next_back().unwrap().move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (0, 0, 0, 12));
 }
 
@@ -267,8 +266,8 @@ fn test_two_subtrees() {
     assert_eq!(stats(&tree), (3220, 2, 3, 0));
 
     // Moving roots to the second subtree does not recycle the first subtree.
-    tree.at_mut(0).at_mut(0).at_mut(0).set_pending_roots();
-    tree.update_roots();
+    tree.at_mut(0).at_mut(0).at_mut(0).move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (2110, 2, 3, 0));
 
     // Moving roots further forward recycles both subtrees.
@@ -276,8 +275,8 @@ fn test_two_subtrees() {
     let mut branch2 = branch1.at_mut(0);
     let mut leaf = branch2.at_mut(0);
     leaf.set_children(0..1000);
-    leaf.set_pending_roots();
-    tree.update_roots();
+    leaf.move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (1000, 0, 1, 5));
 }
 
@@ -295,8 +294,8 @@ fn test_subtree_overflow_with_hint() {
     assert_eq!(stats(&tree), (202, 2, 1, 0));
 
     // Remove first two levels and first generation is recycled.
-    tree.at_mut(0).at_mut(0).set_pending_roots();
-    tree.update_roots();
+    tree.at_mut(0).at_mut(0).move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (100, 0, 1, 2));
 }
 
@@ -317,8 +316,8 @@ fn test_subtree_overflow_without_hint() {
     assert_eq!(stats(&tree), (202, 2, 1, 0));
 
     // Remove first level and only one buffer should be recycled.
-    tree.at_mut(0).set_pending_roots();
-    tree.update_roots();
+    tree.at_mut(0).move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (102, 1, 1, 1));
 }
 
@@ -336,7 +335,7 @@ fn test_subtree_no_overflow() {
     assert_eq!(stats(&tree), (102, 0, 2, 0));
 
     // Remove first two levels and nothing is recycled.
-    tree.at_mut(0).at_mut(0).set_pending_roots();
-    tree.update_roots();
+    tree.at_mut(0).at_mut(0).move_children_to_root();
+    tree.recycle();
     assert_eq!(stats(&tree), (2, 0, 2, 0));
 }

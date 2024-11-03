@@ -129,8 +129,8 @@ pub fn play_mcts(
         // Apply the best move and update the tree
         let mut best_child = tree.at_mut(best_child_index);
         root_state = best_child.get().clone();
-        best_child.set_pending_roots();
-        tree.update_roots();
+        best_child.move_children_to_root();
+        tree.recycle();
     }
 
     root_state.winning_player(goal).unwrap()
