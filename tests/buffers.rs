@@ -2,7 +2,7 @@ use sliding_tree::SlidingBuffers;
 
 #[test]
 fn test_sliding_buffers() {
-    let mut buffers = SlidingBuffers::<usize>::with_capacity(100);
+    let buffers = SlidingBuffers::<usize>::with_capacity(100);
 
     // Test allocation
     let slice1 = buffers.alloc_iter(0..25);
@@ -45,7 +45,7 @@ fn test_sliding_buffers() {
 
 #[test]
 fn test_recursive_allocation() {
-    let mut buffers = SlidingBuffers::<usize>::with_capacity(101);
+    let buffers = SlidingBuffers::<usize>::with_capacity(101);
 
     let mut vec = Vec::new();
     let slice1 = buffers.alloc_iter((0..10).inspect(|_| {
@@ -102,7 +102,7 @@ fn test_preallocate() {
 
 #[test]
 fn test_capacity() {
-    let mut buffers = SlidingBuffers::<usize>::with_capacity(100);
+    let buffers = SlidingBuffers::<usize>::with_capacity(100);
     let slice1 = buffers.alloc_iter(0..100);
     let slice2 = buffers.alloc_iter(0..199);
     assert_eq!(buffers.capacity(), 200);

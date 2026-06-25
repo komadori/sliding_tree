@@ -262,7 +262,8 @@ impl<T> SlidingBuffers<T> {
     ///
     /// Note that it is legal for the iterator to allocate more slices
     /// recursively from the same `SlidingBuffers`.
-    pub fn alloc_iter<'a, I>(&self, mut iter: I) -> &'a mut [T]
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc_iter<I>(&self, mut iter: I) -> &mut [T]
     where
         I: Iterator<Item = T>,
     {
@@ -282,6 +283,11 @@ impl<T> SlidingBuffers<T> {
         }
         // SAFETY: The elements of `buf.vec` are only accessed via the slices
         // created here and these slices do not overlap with each other.
+        // Although the slice is mutable, it is minted from a shared `&self`
+        // borrow (in the manner of a bump allocator), which is sound because
+        // each call returns a disjoint, non-overlapping region. Crucially, the
+        // returned slice's lifetime is tied (by elision) to that of the `&self`
+        // borrow and so cannot outlive the backing buffer.
         let slice = unsafe {
             slice::from_raw_parts_mut(
                 buf.vec.as_mut_ptr().add(start_offset),
@@ -300,7 +306,7 @@ impl<T> SlidingBuffers<T> {
     /// This function is unsafe because it assumes that all existing references
     /// to allocated slices are no longer in use. Calling this function while
     /// there are outstanding references may lead to undefined behaviour.
-    pub unsafe fn recycle_all(&mut self) {
+    pub unsafe fn recycle_all(&self) {
         let mut cell = self.borrow_mut();
         while let Some(mut buf) = cell.finished.pop_front() {
             buf.clear();
@@ -325,7 +331,11 @@ impl<T> SlidingBuffers<T> {
     /// to allocated slices older than the supplied `slice` are no longer in
     /// use. Calling this function while there are outstanding references may
     /// lead to undefined behaviour.
-    pub unsafe fn recycle_older_than(&mut self, slice: &[T]) {
+    ///
+    /// It takes `&self` so that it can be called while newer slices are still
+    /// borrowed. Because the borrow checker cannot distinguish an older borrow
+    /// from a newer one, upholding this contract is the caller's responsibility.
+    pub unsafe fn recycle_older_than(&self, slice: &[T]) {
         let mut cell = self.borrow_mut();
         let generation = cell.find_generation(slice.as_ptr());
         while let Some(peek_buf) = cell.finished.front_mut() {
@@ -372,7 +382,7 @@ impl<T> SlidingBuffers<T> {
     }
 
     /// Frees unused buffers to reduce memory usage.
-    pub fn trim(&mut self) {
+    pub fn trim(&self) {
         self.borrow_mut().recycle.clear();
     }
 

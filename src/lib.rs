@@ -345,18 +345,34 @@ impl<'a, T> SlidingTreeState<'a, T> {
         }
     }
 
+    fn borrow_buffers(&self) -> &'a SlidingBuffers<Node<'a, T>> {
+        // SAFETY: Extends the borrow of `self.buffers` up to `'a` so that
+        // `alloc_iter`, whose result lifetime is tied to the borrow, can mint
+        // the `&'a mut [Node<'a, T>]` slices that the tree is built from.
+        // This reference is consumed immediately and never stored, so it does
+        // not actually outlive the `&self` borrow.
+        //
+        // `'a` represents the lifetime of the tree's heap-allocated buffers.
+        // It's used internally for the references that make up the tree's
+        // structure. This lifetime is never leaked outside the implementation,
+        // which upholds the invariant that a buffer is only freed once there
+        // are no outstanding references to its contents.
+        unsafe { &*(&self.buffers as *const SlidingBuffers<Node<'a, T>>) }
+    }
+
     fn alloc_iter<I>(&self, iter: I) -> &'a mut [Node<'a, T>]
     where
         I: IntoIterator<Item = T>,
     {
-        self.buffers.alloc_iter(iter.into_iter().map(|data| Node {
-            data,
-            children: &mut [],
-        }))
+        self.borrow_buffers()
+            .alloc_iter(iter.into_iter().map(|data| Node {
+                data,
+                children: &mut [],
+            }))
     }
 
-    fn alloc_iter_recursive<'b, I, F, U>(
-        &'b self,
+    fn alloc_iter_recursive<I, F, U>(
+        &self,
         iter: I,
         mut builder: F,
     ) -> &'a mut [Node<'a, T>]
@@ -364,8 +380,8 @@ impl<'a, T> SlidingTreeState<'a, T> {
         I: IntoIterator<Item = (T, U)>,
         F: FnMut(NodeMut<'a, '_, T>, U),
     {
-        self.buffers
-            .alloc_iter(iter.into_iter().map(|(data, recursion)| {
+        self.borrow_buffers().alloc_iter(iter.into_iter().map(
+            |(data, recursion)| {
                 let mut node = Node {
                     data,
                     children: &mut [],
@@ -376,7 +392,8 @@ impl<'a, T> SlidingTreeState<'a, T> {
                 };
                 builder(node_mut, recursion);
                 node
-            }))
+            },
+        ))
     }
 }
 
