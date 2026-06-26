@@ -422,7 +422,7 @@ impl<'a, T> SlidingTree<'a, T> {
     /// Creates a new empty `SlidingTree` with a default capacity based on
     /// the size of `T`.
     pub fn new() -> SlidingTree<'a, T> {
-        SlidingTree::with_capacity(1000000 / size_of::<T>())
+        SlidingTree::with_capacity(1000000 / size_of::<T>().max(1))
     }
 
     /// Creates a new empty `SlidingTree` with the specified capacity.
