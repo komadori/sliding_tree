@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use core::hint::black_box;
+use criterion::{criterion_group, criterion_main, Criterion};
 use mcts::{play_mcts, Goal, NimState, Player};
 use rand::{rngs::StdRng, SeedableRng};
 

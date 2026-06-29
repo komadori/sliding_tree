@@ -188,7 +188,7 @@ fn expand_and_simulate(
     let mut sim_state = state.clone();
     while !sim_state.is_terminal() {
         let moves = sim_state.possible_moves();
-        let mv = moves[rng.gen_range(0..moves.len())];
+        let mv = moves[rng.random_range(0..moves.len())];
         sim_state.apply_move(mv);
     }
 
