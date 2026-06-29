@@ -553,8 +553,8 @@ impl<'a, T> HasChildrenMut<'a, T> for SlidingTree<'a, T> {
     where
         I: IntoIterator<Item = T>,
     {
-        self.state.pending_roots.set(None);
         self.roots = RefSliceCell::new(self.state.alloc_iter(iterable));
+        self.state.pending_roots.set(None);
     }
 
     fn set_children_subtree<I, F, U>(&mut self, iterable: I, builder: F)
@@ -562,10 +562,10 @@ impl<'a, T> HasChildrenMut<'a, T> for SlidingTree<'a, T> {
         I: IntoIterator<Item = (T, U)>,
         F: FnMut(NodeMut<'a, '_, T>, U),
     {
-        self.state.pending_roots.set(None);
         self.roots = RefSliceCell::new(
             self.state.alloc_iter_recursive(iterable, builder),
         );
+        self.state.pending_roots.set(None);
     }
 
     fn adopt_grandchildren_at(&mut self, index: usize) {
