@@ -1,8 +1,13 @@
-use std::{ops::RangeBounds, slice};
+use std::ops::RangeBounds;
+use std::panic::{self, AssertUnwindSafe};
+use std::slice;
 
 use sliding_tree::{
     HasChildren, HasChildrenMut, Node, NodeIterMut, SlidingTree,
 };
+
+mod common;
+use common::{Counters, DropCounter, PanicAfter, PanicOnSizeHint};
 
 struct HideSizeHint<I>(I);
 
@@ -338,4 +343,184 @@ fn test_subtree_no_overflow() {
     tree.at_mut(0).at_mut(0).move_children_to_root();
     tree.recycle();
     assert_eq!(stats(&tree), (2, 0, 2, 0));
+}
+
+fn root_data(tree: &SlidingTree<usize>) -> Vec<usize> {
+    tree.iter().map(|n| *n.get()).collect()
+}
+
+#[test]
+fn test_panic_replacing_roots_preserves_old_roots() {
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(100);
+    tree.set_children(0..3);
+    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(tree.buffer_stats(), (0, 1, 0));
+
+    // Replace the roots with an iterator that panics part way through. The new
+    // nodes are allocated into the same buffer that still holds the live roots,
+    // so a panic must not free that buffer.
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        tree.set_children(PanicAfter::new(2));
+    }));
+    assert!(result.is_err());
+
+    // The buffer holding the original roots must still be present...
+    assert_eq!(tree.buffer_stats(), (0, 1, 0));
+    // ...and the original roots must be intact and traversable.
+    assert_eq!(root_data(&tree), [0, 1, 2]);
+
+    // The tree must remain usable afterwards.
+    tree.set_children(10..14);
+    assert_eq!(root_data(&tree), [10, 11, 12, 13]);
+}
+
+#[test]
+fn test_panic_setting_child_nodes_preserves_tree() {
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(100);
+    tree.set_children(0..3);
+
+    // Setting the children of a leaf allocates into the buffer that holds its
+    // ancestors (the roots). A panic must not free those ancestors.
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        tree.at_mut(1).set_children(PanicAfter::new(2));
+    }));
+    assert!(result.is_err());
+
+    // The roots (the panicking node's siblings and itself) must be intact.
+    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert!(tree.at(1).is_empty());
+
+    // The tree must remain usable afterwards.
+    tree.at_mut(1).set_children(20..23);
+    assert_eq!(
+        tree.at(1).iter().map(|n| *n.get()).collect::<Vec<_>>(),
+        [20, 21, 22]
+    );
+}
+
+#[test]
+fn test_panic_in_subtree_builder_preserves_tree() {
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(1000);
+    tree.set_children(0..3);
+
+    // The builder recursively allocates children and then panics. Both the
+    // outer slice's buffer and the roots' buffer must survive.
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut count = 0;
+        tree.at_mut(0).set_children_subtree(
+            (0..5).map(|x| (x, ())),
+            |mut node, _| {
+                node.set_children(0..4);
+                count += 1;
+                if count == 3 {
+                    panic!("boom");
+                }
+            },
+        );
+    }));
+    assert!(result.is_err());
+
+    // The roots must be intact and the tree must remain usable.
+    assert_eq!(root_data(&tree), [0, 1, 2]);
+}
+
+#[test]
+fn test_panic_does_not_leak_or_double_free_node_data() {
+    let counters = Counters::new();
+    {
+        let mut tree: SlidingTree<DropCounter> =
+            SlidingTree::with_capacity(100);
+        tree.set_children((0..3).map(|_| DropCounter::new(&counters)));
+
+        // Panic partway through a recursive build that constructs many nodes.
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut built = 0;
+            tree.at_mut(0).set_children_subtree(
+                (0..5).map(|_| (DropCounter::new(&counters), ())),
+                |mut node, _| {
+                    node.set_children(
+                        (0..4).map(|_| DropCounter::new(&counters)),
+                    );
+                    built += 1;
+                    if built == 3 {
+                        panic!("boom");
+                    }
+                },
+            );
+        }));
+        assert!(result.is_err());
+
+        // Nodes orphaned by the panic are still owned by the buffers, not
+        // dropped early.
+        assert!(counters.constructed() > counters.dropped());
+
+        // The tree must remain usable afterwards.
+        assert_eq!(tree.len(), 3);
+        tree.at_mut(1)
+            .set_children((0..4).map(|_| DropCounter::new(&counters)));
+        assert_eq!(tree.at(1).len(), 4);
+    }
+
+    // Dropping the tree must drop every constructed node exactly once; a
+    // mismatch means a leak or a double-free.
+    assert!(
+        counters.balanced(),
+        "leak or double-free across panic: constructed {}, dropped {}",
+        counters.constructed(),
+        counters.dropped(),
+    );
+}
+
+#[test]
+fn test_panic_spanning_buffers_preserves_tree() {
+    // Small capacity so the leaf's slice overflows the roots' buffer into a
+    // second one before the panic.
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(10);
+    tree.set_children(0..3);
+    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(tree.buffer_stats(), (0, 1, 0));
+
+    // Fills the roots' buffer, spilling the rest into a fresh buffer that is in
+    // flight when the iterator panics.
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        tree.at_mut(0).set_children(PanicAfter::new(9));
+    }));
+    assert!(result.is_err());
+
+    // Roots' buffer is now finished, the spilled buffer is back as current, and
+    // the roots survived.
+    assert_eq!(tree.buffer_stats(), (1, 1, 0));
+    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert!(tree.at(0).is_empty());
+
+    // The tree must remain usable afterwards.
+    tree.at_mut(0).set_children(20..24);
+    assert_eq!(
+        tree.at(0).iter().map(|n| *n.get()).collect::<Vec<_>>(),
+        [20, 21, 22, 23]
+    );
+    assert_eq!(root_data(&tree), [0, 1, 2]);
+}
+
+#[test]
+fn test_panic_in_size_hint_preserves_tree() {
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(100);
+    tree.set_children(0..3);
+
+    // The panic comes from `size_hint`, not `next`, while a buffer is in flight.
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        tree.at_mut(1).set_children(PanicOnSizeHint::new(3));
+    }));
+    assert!(result.is_err());
+
+    assert_eq!(tree.buffer_stats(), (0, 1, 0));
+    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert!(tree.at(1).is_empty());
+
+    // The tree must remain usable afterwards.
+    tree.at_mut(1).set_children(30..33);
+    assert_eq!(
+        tree.at(1).iter().map(|n| *n.get()).collect::<Vec<_>>(),
+        [30, 31, 32]
+    );
 }

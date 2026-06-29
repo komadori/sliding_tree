@@ -258,6 +258,35 @@ impl<T> SlidingBuffers<T> {
         self.state.borrow_mut()
     }
 
+    fn guarded_iter<I>(
+        &self,
+        iter: &mut I,
+        buf: Buffer<T>,
+    ) -> (Option<I::Item>, usize, Buffer<T>)
+    where
+        I: Iterator<Item = T>,
+    {
+        struct Guard<'a, T> {
+            owner: &'a SlidingBuffers<T>,
+            buf: Option<Buffer<T>>,
+        }
+        impl<T> Drop for Guard<'_, T> {
+            fn drop(&mut self) {
+                // Only reached while unwinding.
+                if let Some(buf) = self.buf.take() {
+                    self.owner.borrow_mut().put_back(buf);
+                }
+            }
+        }
+        let mut guard = Guard {
+            owner: self,
+            buf: Some(buf),
+        };
+        let next = iter.next();
+        let lb = iter.size_hint().0;
+        (next, lb, guard.buf.take().unwrap())
+    }
+
     /// Populates a newly allocated slice with values from the iterator.
     ///
     /// Note that it is legal for the iterator to allocate more slices
@@ -269,13 +298,17 @@ impl<T> SlidingBuffers<T> {
     {
         let mut buf = self.borrow_mut().take_current_buffer(iter.size_hint().0);
         let mut start_offset = buf.vec.len();
-        while let Some(value) = iter.next() {
+        loop {
+            let (next, lower_bound);
+            (next, lower_bound, buf) = self.guarded_iter(&mut iter, buf);
+            let Some(value) = next else { break };
             if buf.is_full() {
-                // This only happens if the iterator is longer than the lower-bound size hint.
+                // This only happens if the iterator is longer than the
+                // lower-bound size hint.
                 (buf, start_offset) = self.borrow_mut().handle_full_buffer(
                     buf,
                     start_offset,
-                    iter.size_hint().0,
+                    lower_bound,
                 );
                 debug_assert!(!buf.is_full());
             }
