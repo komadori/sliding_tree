@@ -62,6 +62,10 @@ fn stats(tree: &SlidingTree<usize>) -> (usize, usize, usize, usize) {
     (count_nodes(tree.iter()), f, c, r)
 }
 
+fn child_data<'a, H: HasChildren<'a, T>, T: Copy + 'a>(node: &H) -> Vec<T> {
+    node.iter().map(|n| *n.get()).collect()
+}
+
 #[test]
 fn test_empty() {
     let mut tree: SlidingTree<usize> = SlidingTree::new();
@@ -345,15 +349,11 @@ fn test_subtree_no_overflow() {
     assert_eq!(stats(&tree), (2, 0, 2, 0));
 }
 
-fn root_data(tree: &SlidingTree<usize>) -> Vec<usize> {
-    tree.iter().map(|n| *n.get()).collect()
-}
-
 #[test]
 fn test_panic_replacing_roots_preserves_old_roots() {
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(100);
     tree.set_children(0..3);
-    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(child_data(&tree), [0, 1, 2]);
     assert_eq!(tree.buffer_stats(), (0, 1, 0));
 
     // Replace the roots with an iterator that panics part way through. The new
@@ -367,11 +367,11 @@ fn test_panic_replacing_roots_preserves_old_roots() {
     // The buffer holding the original roots must still be present...
     assert_eq!(tree.buffer_stats(), (0, 1, 0));
     // ...and the original roots must be intact and traversable.
-    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(child_data(&tree), [0, 1, 2]);
 
     // The tree must remain usable afterwards.
     tree.set_children(10..14);
-    assert_eq!(root_data(&tree), [10, 11, 12, 13]);
+    assert_eq!(child_data(&tree), [10, 11, 12, 13]);
 }
 
 #[test]
@@ -387,7 +387,7 @@ fn test_panic_setting_child_nodes_preserves_tree() {
     assert!(result.is_err());
 
     // The roots (the panicking node's siblings and itself) must be intact.
-    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(child_data(&tree), [0, 1, 2]);
     assert!(tree.at(1).is_empty());
 
     // The tree must remain usable afterwards.
@@ -421,7 +421,7 @@ fn test_panic_in_subtree_builder_preserves_tree() {
     assert!(result.is_err());
 
     // The roots must be intact and the tree must remain usable.
-    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(child_data(&tree), [0, 1, 2]);
 }
 
 #[test]
@@ -477,7 +477,7 @@ fn test_panic_spanning_buffers_preserves_tree() {
     // second one before the panic.
     let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(10);
     tree.set_children(0..3);
-    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(child_data(&tree), [0, 1, 2]);
     assert_eq!(tree.buffer_stats(), (0, 1, 0));
 
     // Fills the roots' buffer, spilling the rest into a fresh buffer that is in
@@ -490,7 +490,7 @@ fn test_panic_spanning_buffers_preserves_tree() {
     // Roots' buffer is now finished, the spilled buffer is back as current, and
     // the roots survived.
     assert_eq!(tree.buffer_stats(), (1, 1, 0));
-    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(child_data(&tree), [0, 1, 2]);
     assert!(tree.at(0).is_empty());
 
     // The tree must remain usable afterwards.
@@ -499,7 +499,7 @@ fn test_panic_spanning_buffers_preserves_tree() {
         tree.at(0).iter().map(|n| *n.get()).collect::<Vec<_>>(),
         [20, 21, 22, 23]
     );
-    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(child_data(&tree), [0, 1, 2]);
 }
 
 #[test]
@@ -514,7 +514,7 @@ fn test_panic_in_size_hint_preserves_tree() {
     assert!(result.is_err());
 
     assert_eq!(tree.buffer_stats(), (0, 1, 0));
-    assert_eq!(root_data(&tree), [0, 1, 2]);
+    assert_eq!(child_data(&tree), [0, 1, 2]);
     assert!(tree.at(1).is_empty());
 
     // The tree must remain usable afterwards.
@@ -523,4 +523,149 @@ fn test_panic_in_size_hint_preserves_tree() {
         tree.at(1).iter().map(|n| *n.get()).collect::<Vec<_>>(),
         [30, 31, 32]
     );
+}
+
+#[test]
+fn test_children_mut() {
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(1000);
+    tree.set_children(0..3);
+
+    {
+        // SlidingTree::children_mut yields a NodeChildrenMut over the roots.
+        let mut cm = tree.children_mut();
+
+        // Read-side HasChildren methods.
+        assert!(!cm.is_empty());
+        assert_eq!(cm.len(), 3);
+        assert_eq!(cm.children().len(), 3);
+        assert_eq!(child_data(&cm), [0, 1, 2]);
+        assert_eq!(*cm.at(1).get(), 1);
+
+        // Mutate a child through at_mut.
+        cm.at_mut(0).set_children(10..13);
+        assert_eq!(child_data(cm.at(0)), [10, 11, 12]);
+
+        // Mutate every child through iter_mut.
+        for mut child in cm.iter_mut() {
+            *child.get_mut() += 100;
+        }
+        assert_eq!(child_data(&cm), [100, 101, 102]);
+
+        // A nested children_mut re-borrows the same children.
+        {
+            let mut again = cm.children_mut();
+            again
+                .at_mut(1)
+                .set_children_subtree((0..2).map(|x| (x, ())), |mut n, _| {
+                    n.set_children(0..2)
+                });
+        }
+        assert_eq!(cm.at(1).len(), 2);
+
+        // set_children replaces the whole slice.
+        cm.set_children(20..25);
+        assert_eq!(child_data(&cm), [20, 21, 22, 23, 24]);
+
+        // set_children_subtree replaces it again, building grandchildren.
+        cm.set_children_subtree((30..32).map(|x| (x, ())), |mut n, _| {
+            n.set_children(0..3);
+        });
+        assert_eq!(child_data(&cm), [30, 31]);
+        assert_eq!(cm.at(0).len(), 3);
+    }
+
+    // NodeMut::children_mut + NodeChildrenMut::move_children_to_root: descend
+    // into a root and promote its children to become the tree's roots.
+    {
+        let mut node = tree.at_mut(0);
+        node.children_mut().move_children_to_root();
+    }
+    tree.recycle();
+    assert_eq!(child_data(&tree), [0, 1, 2]);
+}
+
+#[test]
+fn test_adopt_grandchildren_at() {
+    // SlidingTree::adopt_grandchildren_at promotes one root's children to roots.
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(1000);
+    tree.set_children_subtree((0..3).map(|x| (x, ())), |mut node, _| {
+        // Root i is given the distinct grandchildren i*10..i*10+3.
+        let base = *node.get() * 10;
+        node.set_children(base..base + 3);
+    });
+    assert_eq!(child_data(&tree), [0, 1, 2]);
+
+    tree.adopt_grandchildren_at(1);
+    assert_eq!(child_data(&tree), [10, 11, 12]);
+    tree.recycle();
+    assert_eq!(child_data(&tree), [10, 11, 12]);
+
+    // NodeMut::adopt_grandchildren_at promotes a grandchild set into the node.
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(1000);
+    tree.set_children(0..1);
+    tree.at_mut(0).set_children_subtree(
+        (0..3).map(|x| (x, ())),
+        |mut node, _| {
+            let base = *node.get() * 10 + 1;
+            node.set_children(base..base + 2);
+        },
+    );
+    // root[0]'s children are [0, 1, 2]; child 2's children are [21, 22].
+    tree.at_mut(0).adopt_grandchildren_at(2);
+    assert_eq!(child_data(tree.at(0)), [21, 22]);
+
+    // NodeChildrenMut::adopt_grandchildren_at behaves the same via the view.
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(1000);
+    tree.set_children(0..1);
+    tree.at_mut(0).set_children_subtree(
+        (0..3).map(|x| (x, ())),
+        |mut node, _| {
+            let base = *node.get() * 10 + 5;
+            node.set_children(base..base + 2);
+        },
+    );
+    // root[0]'s children are [0, 1, 2]; child 0's children are [5, 6].
+    {
+        let mut node = tree.at_mut(0);
+        node.children_mut().adopt_grandchildren_at(0);
+    }
+    assert_eq!(child_data(tree.at(0)), [5, 6]);
+}
+
+#[test]
+fn test_children_accessor() {
+    let mut tree: SlidingTree<usize> = SlidingTree::with_capacity(100);
+    tree.set_children(0..3);
+    tree.at_mut(0).set_children(10..14);
+
+    // SlidingTree::children returns the roots slice.
+    assert_eq!(child_data(&tree), [0, 1, 2]);
+    assert_eq!(tree.children().len(), tree.len());
+
+    // Node::children (immutable reference) returns its child slice.
+    let node: &Node<usize> = tree.at(0);
+    assert_eq!(node.children().len(), 4);
+    assert_eq!(child_data(node), [10, 11, 12, 13]);
+
+    // NodeMut::children returns the same slice through a mutable reference.
+    let node_mut = tree.at_mut(0);
+    assert_eq!(node_mut.children().len(), 4);
+    assert_eq!(child_data(&node_mut), [10, 11, 12, 13]);
+}
+
+#[test]
+fn test_root_noop_and_default() {
+    // Default constructs an empty tree.
+    let mut tree: SlidingTree<usize> = SlidingTree::default();
+    assert!(tree.is_empty());
+
+    tree.set_children(0..3);
+
+    // move_children_to_root on the tree itself is a no-op: the children are
+    // already the roots.
+    tree.move_children_to_root();
+    assert_eq!(child_data(&tree), [0, 1, 2]);
+
+    tree.recycle();
+    assert_eq!(child_data(&tree), [0, 1, 2]);
 }
