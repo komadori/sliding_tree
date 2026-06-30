@@ -39,10 +39,10 @@ impl GenerationSpan {
 }
 
 impl From<Generation> for GenerationSpan {
-    fn from(gen: Generation) -> Self {
+    fn from(single: Generation) -> Self {
         GenerationSpan {
-            start: gen,
-            end: gen,
+            start: single,
+            end: single,
         }
     }
 }
@@ -404,7 +404,8 @@ impl<T> SlidingBuffers<T> {
         let src_generation = cell.find_generation(src.as_ptr());
         if !dst.is_empty() {
             let dst_generation = cell.find_generation(dst.as_ptr());
-            assert!(!dst_generation.is_older_than(src_generation),
+            assert!(
+                !dst_generation.is_older_than(src_generation),
                 "src in generation {}:{} cannot reference dst in generation {}:{}",
                 src_generation.start.0,
                 src_generation.end.0,

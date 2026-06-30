@@ -1,7 +1,7 @@
 use core::hint::black_box;
-use criterion::{criterion_group, criterion_main, Criterion};
-use mcts::{play_mcts, Goal, NimState, Player};
-use rand::{rngs::StdRng, SeedableRng};
+use criterion::{Criterion, criterion_group, criterion_main};
+use mcts::{Goal, NimState, Player, play_mcts};
+use rand::{SeedableRng, rngs::StdRng};
 
 #[path = "../tests/mcts.rs"]
 mod mcts;

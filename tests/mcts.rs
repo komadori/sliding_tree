@@ -89,11 +89,7 @@ impl NimState {
     fn win_rate(&self, player: Player) -> f32 {
         let wins = self.wins[player] as f32;
         let visits = self.visits as f32;
-        if visits > 0.0 {
-            wins / visits
-        } else {
-            0.0
-        }
+        if visits > 0.0 { wins / visits } else { 0.0 }
     }
 }
 
