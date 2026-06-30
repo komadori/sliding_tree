@@ -1,5 +1,16 @@
 # Changelog
 
+## Sliding Tree 0.3.0 (2026-06-30)
+
+### Changed
+- Set minimum supported Rust version to 1.85 and 2024 edition.
+
+### Fixed
+- Fixed soundness issue with slice references outliving `SlidingBuffers`.
+- Fixed division by zero if `T` is a ZST.
+- Fixed pending roots being cleared before the new roots were set.
+- Fixed panic safety of `alloc_iter`.
+
 ## Sliding Tree 0.2.0 (2024-11-04)
 
 ### Added
