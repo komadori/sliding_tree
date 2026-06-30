@@ -254,10 +254,12 @@ impl<T> SlidingBuffers<T> {
         }
     }
 
+    #[inline]
     fn borrow_mut(&self) -> RefMut<'_, SlidingBuffersState<T>> {
         self.state.borrow_mut()
     }
 
+    #[inline]
     fn guarded_iter<I>(
         &self,
         iter: &mut I,
