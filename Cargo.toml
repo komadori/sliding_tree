@@ -3,6 +3,7 @@ name = "sliding_tree"
 version = "0.2.0"
 authors = ["Robin KAY <komadori@gekkou.co.uk>"]
 edition = "2024"
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 description = "A tree that grows from the leaves and recedes from the root."
 readme = "README.md"
