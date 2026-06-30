@@ -236,7 +236,7 @@ mod tests {
     ) {
         let initial_state = NimState::new(initial_piles, Player::Player1);
         let mut rng = Pcg64Mcg::seed_from_u64(12345);
-        let winner = play_mcts(initial_state, 70000, goal, &mut rng);
+        let winner = play_mcts(initial_state, 150000, goal, &mut rng);
         assert_eq!(expected_winner, winner);
     }
 
